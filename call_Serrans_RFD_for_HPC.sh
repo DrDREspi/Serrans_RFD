@@ -3,7 +3,7 @@
 ### –- specify queue --
 #BSUB -q cabgpu
 ### -- set the job Name --
-#BSUB -J Serrans_RFD_Amylin-1
+#BSUB -J (ADD JOB NAME)
 ### -- ask for number of cores (default: 1) --
 #BSUB -n 8
 ### -- Select the resources: 1 gpu in exclusive process mode --
@@ -15,7 +15,7 @@
 ### -- set the email address --
 # please uncomment the following line and put in your e-mail address,
 # if you want to receive e-mail notifications on a non-default address
-#BSUB -u diruespi@gmail.com
+#BSUB -u (ADD YOUR EMAIL IF YOU WISH)
 ### -- send notification at start --
 #BSUB -B
 ### -- send notification at completion--
@@ -25,12 +25,6 @@
 #BSUB -o std/gpu_%J.out
 #BSUB -e std/gpu_%J.err
 # -- end of LSF options --
-
-# Change RUN_ID to keep track of files/runs
-#!/bin/bash
-
-source /dtu/projects/RFdiffusion/netMHCpan/envs/VALENTIA/bin/activate
-
 
 
 ####################################################################
@@ -56,9 +50,16 @@ SCRIPT_ARGS="-r 5 -m 200 -d 10 -ipae 7 -plddt 90 -sc 150 -seq 5 -psc 10 -pseq 5"
 
 
 
+
 ####################################################################
 #Do not modify anything after this line
 ####################################################################
+
+# Change RUN_ID to keep track of files/runs
+#!/bin/bash
+
+source /dtu/projects/RFdiffusion/netMHCpan/envs/VALENTIA/bin/activate
+
 
 PYTHON_FILE="Serrans_RFD.py"
 
