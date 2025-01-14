@@ -39,7 +39,7 @@ def read_csv_file(csv_file, output_file):
     infile = open(csv_file, "r")
     for line in infile:
         if "pae_interaction" in line:
-            output_file.write(line+",sequence")
+            output_file.write(line[:-1]+",sequence\n")
         else:
             splitted = line.strip().split(",")
             print(splitted)
