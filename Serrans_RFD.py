@@ -249,7 +249,7 @@ def main():
     
 
     #Loop 
-    while True and round_num < args.r:
+    while True and round_num <= args.r:
         print(f"Starting loop for round {round_num}...")
         
         # Step 4: Run partial diffusion
