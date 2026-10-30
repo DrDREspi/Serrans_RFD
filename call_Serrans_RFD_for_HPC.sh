@@ -1,81 +1,89 @@
-#!/bin/sh
-### General options
-### –- specify queue --
+#!/bin/bash
+# ============================================================================
+# LSF submit script for Serrans_RFD.
+#
+#   1. Edit config.sh so it points at your RFdiffusion / ProteinMPNN / AF2.
+#   2. Edit the #BSUB lines below for your cluster (queue name especially).
+#   3. Put your target PDB file(s) in targets/.
+#   4. Set SCRIPT_ARGS below, then:  bsub < call_Serrans_RFD_for_HPC.sh
+#
+# On a SLURM cluster, replace the #BSUB block with the equivalent #SBATCH
+# directives; nothing below the "do not modify" line needs to change.
+# ============================================================================
+
+### -- queue (CHANGE THIS to a GPU queue on your cluster) --
 #BSUB -q cabgpu
-### -- set the job Name --
-#BSUB -J (ADD JOB NAME)
-### -- ask for number of cores (default: 1) --
+### -- job name --
+#BSUB -J serrans_rfd
+### -- number of cores --
 #BSUB -n 8
-### -- Select the resources: 1 gpu in exclusive process mode --
+### -- one GPU in exclusive process mode --
 #BSUB -gpu "num=1:mode=exclusive_process"
-### -- set walltime limit: hh:mm --
+### -- walltime limit, hh:mm --
 #BSUB -W 150:00
-# request 5GB of system-memory
+### -- system memory --
 #BSUB -R "rusage[mem=10GB]"
-### -- set the email address --
-# please uncomment the following line and put in your e-mail address,
-# if you want to receive e-mail notifications on a non-default address
-#BSUB -u (ADD YOUR EMAIL IF YOU WISH)
-### -- send notification at start --
+### -- email address for notifications (uncomment and fill in to use) --
+##BSUB -u your.email@example.com
+### -- notify at start and at completion --
 #BSUB -B
-### -- send notification at completion--
 #BSUB -N
-### -- Specify the output and error file. %J is the job-id --
-### -- -o and -e mean append, -oo and -eo mean overwrite --
+### -- output and error files; %J is the job id --
 #BSUB -o std/gpu_%J.out
 #BSUB -e std/gpu_%J.err
 # -- end of LSF options --
 
 
 ####################################################################
-# Define the arguments here.
-#ARGUMENTS:
-# "-r", type=int, help="Number of partial diffusion rounds.", default=3
-# "-m", type=int, help="Number of minibinders required.", default=100
-# "-d", type=int, help="Number of desings going to the next partial diffusion round.", default=10
-# "-ipae", type=float, help="ipAE threshold.", default=10
-# "-plddt", type=float, help="pLDDT threshold.", default=90
-# "-hs", type=str, help="Hotspots. e.g., A23,A45 (no spaces in between).", default="A4,A7"
-# "-sc", type=int, help="Number of scaffolds produced by RFDiffusion.", default=175
-# "-seq", type=int, help="Number of sequences per scaffold produced by ProteinMPNN", default= 5
-# "-psc", type=int, help="Number of scaffolds produced by RFDiffusion in partial diffusion steps.", default=5
-# "-pseq", type=int, help="Number of sequences per scaffold produced by ProteinMPNN in partial diffusion steps", default= 10
+# Pipeline arguments
+####################################################################
+# -r     Maximum number of partial diffusion rounds.              (default 3)
+# -m     Number of minibinders required before stopping.           (default 100)
+# -d     Designs carried into the next partial diffusion round.    (default 10)
+# -ipae  ipAE (pae_interaction) threshold a design must beat.      (default 10)
+# -plddt pLDDT threshold a design must beat.                       (default 90)
+# -hs    Hotspots, e.g. A23,A45 (no spaces). "False" to let
+#        RFdiffusion choose the interface.                         (default False)
+# -sc    Scaffolds from RFdiffusion in round 0.                    (default 175)
+# -seq   Sequences per scaffold from ProteinMPNN in round 0.       (default 5)
+# -psc   Scaffolds per parent in the partial diffusion rounds.     (default 5)
+# -pseq  Sequences per scaffold in the partial diffusion rounds.   (default 10)
+#
+# For example:
+# SCRIPT_ARGS="-r 5 -m 10 -d 7 -ipae 6 -plddt 95 -hs A27 -sc 200 -seq 10 -psc 10 -pseq 15"
 
-#For example:
-#SCRIPT_ARGS="Serrans_RFD.py -r 5 -m 10 -d 7 -ipae 6 -plddt 95 -hs A27 -sc 200 -seq 10 -psc 10 -pseq 15"
-
-# Define the arguments to be passed to the script (leave empty if no arguments)
 SCRIPT_ARGS="-r 5 -m 200 -d 10 -ipae 7 -plddt 90 -sc 150 -seq 5 -psc 10 -pseq 5"
 
 
-
-
-
 ####################################################################
-#Do not modify anything after this line
+# Do not modify anything after this line
 ####################################################################
+set -eo pipefail
 
-# Change RUN_ID to keep track of files/runs
-#!/bin/bash
+SERRANS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SERRANS_ROOT"
 
-source /dtu/projects/RFdiffusion/netMHCpan/envs/VALENTIA/bin/activate
+# shellcheck disable=SC1091
+source "$SERRANS_ROOT/config.sh"
 
+mkdir -p std
+
+# Activate the Python environment the orchestrator runs in (needs pandas).
+if [ -n "$SERRANS_ENV_MAIN" ]; then
+    serrans_activate "$SERRANS_ENV_MAIN"
+fi
 
 PYTHON_FILE="Serrans_RFD.py"
 
+echo "Running: python3 $PYTHON_FILE $SCRIPT_ARGS"
+# SCRIPT_ARGS is intentionally unquoted so it splits into separate arguments.
+# shellcheck disable=SC2086
+status=0
+python3 "$PYTHON_FILE" $SCRIPT_ARGS || status=$?
 
-# Debugging: Print the command being executed
-if [[ -z "$SCRIPT_ARGS" ]]; then
-    echo "Executing Python script without arguments: $PYTHON_FILE"
-    python "$PYTHON_FILE"
-else
-    echo "Executing Python script with arguments: $PYTHON_FILE $SCRIPT_ARGS"
-    python "$PYTHON_FILE" $SCRIPT_ARGS
-fi
-
-# Check the exit status of the python command
-if [[ $? -eq 0 ]]; then
+if [ $status -eq 0 ]; then
     echo "Script executed successfully."
 else
-    echo "Script execution failed with an error."
+    echo "Script execution failed with exit code $status."
 fi
+exit $status

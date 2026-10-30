@@ -1,74 +1,103 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# Partial diffusion round: re-diffuse one surviving binder, then redesign its
+# sequence with ProteinMPNN and re-score with AF2.
+#
+# Usage: partial_diff_2.sh <pdb_file> <basename> <scaffolds> <seqs>
+#
+# All tool locations come from config.sh in the repository root.
+# ---------------------------------------------------------------------------
+set -eo pipefail
 
+SERRANS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$SERRANS_ROOT/config.sh"
 
-# Input arguments
 PDB_FILE=$1
 BASENAME=$2
 SCAFFOLDS=$3
 SEQUENCES=$4
 
-# Log the inputs
-echo "PDB_FILE: $PDB_FILE"
-echo "BASENAME: $BASENAME"
+if [ -z "$SEQUENCES" ]; then
+    echo "Usage: $0 <pdb_file> <basename> <scaffolds> <seqs>" >&2
+    exit 1
+fi
+
+echo "PDB_FILE:  $PDB_FILE"
+echo "BASENAME:  $BASENAME"
 echo "SCAFFOLDS: $SCAFFOLDS"
 echo "SEQUENCES: $SEQUENCES"
 
-# Set-up paths for modules
-source /dtu/projects/RFdiffusion/setup.sh
+serrans_init_modules
 
-# RFdiffusion
-module load RFdiffusion
-mkdir partial_outputs
+# --- 1. Work out the contig string from the input complex --------------------
+# Chain A is the binder, chain B is the target. The binder is fully re-diffused
+# (its own length), the target is held fixed.
+pdb_basename=$(basename "$PDB_FILE" .pdb)
+target_end=$(awk '$1 == "ATOM" && $5 == "B" {value=$6} END{print value}' "$PDB_FILE")
+binder_end=$(awk '$1 == "ATOM" && $5 == "A" {value=$6} END{print value}' "$PDB_FILE")
 
-# Extracting the base name of the file for use in output prefix
-pdb_basename=$(basename $PDB_FILE .pdb)
-target_atom_value=$(awk '$1 == "ATOM" && $5 == "B" {value=$6} END{print value}' "$PDB_FILE")
-echo "Last ATOM value in chain B of $pdb_basename: $target_atom_value"
-binder_atom_value=$(awk '$1 == "ATOM" && $5 == "A" {value=$6} END{print value}' "$PDB_FILE")
-echo "Last ATOM value in chain A of $pdb_basename: $binder_atom_value"
-target_start=$((1 + binder_atom_value))
-echo "Target length in $pdb_basename: $target_length"
-# Run the inference command with the current PDB file
-# Dynamically construct the command with variable substitution
-cmd="run_inference.py inference.output_prefix=partial_outputs/$pdb_basename inference.input_pdb=$PDB_FILE 'contigmap.contigs=[$binder_atom_value-$binder_atom_value/0 B$target_start-$target_atom_value]' inference.num_designs="$SCAFFOLDS" diffuser.partial_T=25"
-# 'contigmap.provide_seq=[$binder_atom_value-$target_atom_value]'"
+if [ -z "$binder_end" ] || [ -z "$target_end" ]; then
+    echo "ERROR: could not read chain A/B residue numbers from $PDB_FILE" >&2
+    exit 1
+fi
 
-echo "Executing command: $cmd"
+target_start=$((1 + binder_end))
+echo "Binder (chain A) last residue: $binder_end"
+echo "Target (chain B) last residue: $target_end"
 
-# Execute the command
-eval $cmd
+contigs="${binder_end}-${binder_end}/0 B${target_start}-${target_end}"
 
+# --- 2. RFdiffusion in partial diffusion mode --------------------------------
+serrans_load rfdiffusion
+mkdir -p partial_outputs
+
+run_inference.py \
+    inference.output_prefix="partial_outputs/$pdb_basename" \
+    inference.input_pdb="$PDB_FILE" \
+    "contigmap.contigs=[$contigs]" \
+    inference.num_designs="$SCAFFOLDS" \
+    diffuser.partial_T="$SERRANS_PARTIAL_T"
 
 rm -rf partial_outputs/traj
 
-# Initialize a counter
+# Give the new backbones predictable names: <parent>_0.pdb, <parent>_1.pdb, ...
 counter=0
 cd partial_outputs
-# Loop through all .pdb files in the current directory
 for file in *.pdb; do
-    # Construct the new file name
-    newFileName="${BASENAME}_${counter}.pdb"
-    
-    # Rename the file
-    mv "$file" "$newFileName"
-    
-    # Increment the counter
-    ((counter++))
+    [ -e "$file" ] || continue
+    mv "$file" "${BASENAME}_${counter}.pdb"
+    counter=$((counter + 1))
 done
 cd ..
+serrans_unload
 
-module purge
-
-# ProteinMPNN 
-module load proteinmpnn 
+# --- 3. ProteinMPNN: redesign the sequences ----------------------------------
+serrans_load proteinmpnn
 mkdir -p Binder_design_outputs
-# compress pdb files from RFdiffusion into a silent file
-silentfrompdbs partial_outputs/${BASENAME}*.pdb > Binder_design_outputs/$BASENAME.silent
+
+if ! compgen -G "partial_outputs/${BASENAME}*.pdb" >/dev/null; then
+    echo "ERROR: partial diffusion produced no backbones for $BASENAME." >&2
+    exit 1
+fi
+
+silentfrompdbs partial_outputs/"${BASENAME}"*.pdb > "Binder_design_outputs/$BASENAME.silent"
 cd Binder_design_outputs
-dl_interface_design.py -silent $BASENAME.silent -seqs_per_struct "$SEQUENCES" -relax_cycles 0 -outsilent ${BASENAME}_mpnn.silent
-module purge
+dl_interface_design.py -silent "$BASENAME.silent" \
+                       -seqs_per_struct "$SEQUENCES" \
+                       -relax_cycles 0 \
+                       -outsilent "${BASENAME}_mpnn.silent"
+rm -f "$BASENAME.silent"
+cd ..
 rm -rf partial_outputs
+serrans_unload
 
+# --- 4. AF2 initial guess: predict and score ---------------------------------
+serrans_load af2
+cd Binder_design_outputs
+predict.py -silent "${BASENAME}_mpnn.silent" \
+           -scorefilename "${BASENAME}_out.sc" \
+           -outsilent "${BASENAME}_af2.silent"
+rm -f "${BASENAME}_mpnn.silent"
 
-# AF2
-module load af2_binder_design
-predict.py -silent ${BASENAME}_mpnn.silent -scorefilename ${BASENAME}_out.sc -outsilent ${BASENAME}_af2.silent
+echo "Finished partial diffusion for $BASENAME."
