@@ -1,4 +1,17 @@
+"""Optional extra scoring pass: re-predict the minibinders with ColabFold.
+
+This step is NOT part of the automatic pipeline. Run it by hand after
+Serrans_RFD.py has finished, from the same working directory:
+
+    python3 src/extract_ptm_metrics.py
+
+It rebuilds each minibinder as a FASTA, runs colabfold_batch with
+--calc-extra-ptm, and adds actifptm / ptm / iptm columns to
+minibinders_to_validate/minibinders_to_validate_seqs.csv.
+"""
+
 import os
+import sys
 import csv
 import json
 import shutil
@@ -8,6 +21,10 @@ from Bio.PDB import PDBParser
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from subprocess import run
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import serrans_config
 
 # Step 1: Extract sequences from PDB and create FASTA files
 def extract_sequences_and_create_fasta(pdb_folder, csv_file, fasta_folder):
@@ -49,9 +66,7 @@ def extract_sequences_and_create_fasta(pdb_folder, csv_file, fasta_folder):
 
 def run_colabfold(fasta_folder, output_folder):
     os.makedirs(output_folder, exist_ok=True)
-    command = (
-        "source /dtu/projects/RFdiffusion/setup.sh && "
-        "module load colabfold/1.5.6 && "
+    command = serrans_config.colabfold_command(
         f"colabfold_batch {fasta_folder} {output_folder} --calc-extra-ptm"
     )
     print(f"Running command: {command}")
@@ -122,6 +137,12 @@ def main():
     output_folder = "Serrans_RFD_ptm_outputs"
     mid_files_folder = "ptm_mid_files"
 
+
+    if not os.path.exists(input_csv):
+        raise SystemExit(
+            f"{input_csv} not found. Run the main pipeline (Serrans_RFD.py) "
+            "first, from this same directory."
+        )
 
     extract_sequences_and_create_fasta(pdb_folder, input_csv, fasta_folder)
     run_colabfold(fasta_folder, output_folder)

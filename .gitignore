@@ -1,0 +1,23 @@
+# Scheduler logs
+std/
+
+# Pipeline working folders
+RFdiffusion_outputs/
+partial_outputs/
+outputs/
+Binder_design_outputs/
+best_designs/
+
+# Pipeline results (keep your own runs out of git)
+minibinders_to_validate/
+top10binders/
+top10binders_PD*/
+TOP10_designs_per_round/
+Serrans_int_files/
+Serrans_RFD_outputs*/
+Serrans_RFD_ptm_outputs/
+ptm_mid_files/
+
+# Python
+__pycache__/
+*.pyc

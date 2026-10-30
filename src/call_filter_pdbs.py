@@ -1,47 +1,56 @@
+"""Round 0 filter: run filter_pdbs_modified.sh for every AF2 score file.
+
+MATCH_SUFFIX picks which score files belong to this stage; STRIP_SUFFIX is
+removed to recover the run id used to name the silent and output files.
+"""
+
 import os
 import subprocess
-import argparse
+import sys
 
-# Argument parsing for the round number
-parser = argparse.ArgumentParser(description='Process protein designs and output top designs and minibinders.')
-parser.add_argument('-rn', type=int, help='The round number for this execution')
-parser.add_argument('-r', type=int, help='The round number for this execution', default=5)
-parser.add_argument("-m", type=int, help="Number of minibinders required.", default=10)
-parser.add_argument("-d", type=int, help="Number of desings going to the next partial diffusion round.", default=10)
-parser.add_argument("-ipae", type=float, help="ipAE threshold.", default=10)
-parser.add_argument("-plddt", type=float, help="pLDDT threshold.", default=90)
-parser.add_argument("-hs", type=str, help="Hotspots. e.g., A23, A45", default= False)
-parser.add_argument("-sc", type=int, help="Number of scaffolds produced by RFDiffusion.", default=175)
-parser.add_argument("-seq", type=int, help="Number of sequences per scaffold produced by ProteinMPNN", default= 5)
-parser.add_argument("-psc", type=int, help="Number of scaffolds produced by RFDiffusion.", default=5)
-parser.add_argument("-pseq", type=int, help="Number of sequences per scaffold produced by ProteinMPNN", default= 10)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-args = parser.parse_args()
+import cli_args
+import serrans_config
 
-# Path to the folder containing the files
-folder_path = 'Binder_design_outputs'
-# Path to the shell script
-shell_script = '../src/filter_pdbs_modified.sh'
+FOLDER = "Binder_design_outputs"
+# Absolute path, because this script chdirs into {FOLDER} before running it.
+SHELL_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filter_pdbs_modified.sh")
+MATCH_SUFFIX = "_out.sc"
+STRIP_SUFFIX = "_out.sc"
+STAGE = "round 0"
 
-os.chdir(folder_path)
 
-# Loop through every file in the folder
-for filename in os.listdir('.'):
-    # Check if the file ends with '_out.sc'
-    if filename.endswith('_out.sc'):
-        # Extract the RUN_ID (part of the filename before '_out.sc')
-        run_id = filename.split('_out.sc')[0]
-        print(run_id)
-        
-        # Prepare the command
-        command = [shell_script, '-r', run_id, '-t', "30"]
-        
-        # Run the shell script with the appropriate arguments
+def main(args):
+    if not os.path.isdir(FOLDER):
+        raise SystemExit(f"'{FOLDER}' not found; the previous step produced nothing.")
+
+    threshold = serrans_config.get("SERRANS_PREFILTER_PAE", "30")
+    os.chdir(FOLDER)
+
+    score_files = sorted(f for f in os.listdir(".") if f.endswith(MATCH_SUFFIX))
+    if not score_files:
+        print(f"No '{MATCH_SUFFIX}' score files in '{FOLDER}'; nothing to filter.")
+        return
+
+    print(f"Filtering {len(score_files)} {STAGE} score file(s).")
+
+    failures = []
+    for filename in score_files:
+        run_id = filename[: -len(STRIP_SUFFIX)]
+        print(f"Filtering {run_id}")
         try:
-            subprocess.run(command, check=True)
-            print(f"Successfully ran script for {filename} with RUN_ID {run_id}")
+            subprocess.run(
+                ["bash", SHELL_SCRIPT, "-r", run_id, "-t", str(threshold)],
+                check=True,
+            )
         except subprocess.CalledProcessError as e:
-            print(f"Error running script for {filename}: {e}")
+            print(f"Error filtering {filename}: {e}")
+            failures.append(run_id)
+
+    if failures:
+        raise SystemExit(f"Filtering failed for: {', '.join(failures)}")
 
 
-
+if __name__ == "__main__":
+    main(cli_args.parse(f"Filter the {STAGE} designs."))

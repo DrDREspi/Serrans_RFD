@@ -1,81 +1,65 @@
+"""Final step: add the binder amino acid sequence to the minibinder table.
+
+Reads minibinders_to_validate/minibinders_to_validate.csv, pulls the chain A
+sequence out of each design's PDB, and writes
+minibinders_to_validate/minibinders_to_validate_seqs.csv.
+"""
+
+import csv
 import os
-import argparse
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import cli_args
+import pdb_utils
+
+MINIBINDERS_DIR = "minibinders_to_validate"
+INPUT_CSV = os.path.join(MINIBINDERS_DIR, "minibinders_to_validate.csv")
+OUTPUT_CSV = os.path.join(MINIBINDERS_DIR, "minibinders_to_validate_seqs.csv")
+PDBS_DIR = os.path.join(MINIBINDERS_DIR, "pdbs")
 
 
-def extract_sequence_from_pdb(pdb_file):
-    # A dictionary to map three-letter amino acid codes to one-letter codes
-    amino_acid_codes = {
-        'ALA': 'A', 'CYS': 'C', 'ASP': 'D', 'GLU': 'E', 'PHE': 'F',
-        'GLY': 'G', 'HIS': 'H', 'ILE': 'I', 'LYS': 'K', 'LEU': 'L',
-        'MET': 'M', 'ASN': 'N', 'PRO': 'P', 'GLN': 'Q', 'ARG': 'R',
-        'SER': 'S', 'THR': 'T', 'VAL': 'V', 'TRP': 'W', 'TYR': 'Y'
-    }
+def main(args):
+    if not os.path.exists(INPUT_CSV):
+        print(f"No minibinder table at {INPUT_CSV}; nothing to do.")
+        return
 
-    sequence = ""
-    previous_residue_number = None
+    with open(INPUT_CSV, newline="") as infile:
+        reader = csv.DictReader(infile)
+        if reader.fieldnames is None:
+            print(f"{INPUT_CSV} is empty; nothing to do.")
+            return
+        if "design_name" not in reader.fieldnames:
+            raise SystemExit(
+                f"{INPUT_CSV} has no 'design_name' column "
+                f"(found: {reader.fieldnames})."
+            )
+        rows = list(reader)
+        fieldnames = reader.fieldnames + ["sequence"]
 
-    with open(pdb_file, 'r') as file:
-        for line in file:
-            # Check if the line is for an ATOM, chain A, and CA atom
-            if (
-                line.startswith("ATOM") and
-                line[13:15].strip() == "CA" and  # Check for alpha carbon
-                line[21].strip() == "A"         # Check for chain A
-            ):
-                residue_name = line[17:20].strip()
-                residue_number = line[22:26].strip()
+    written = 0
+    missing = 0
+    with open(OUTPUT_CSV, "w", newline="") as outfile:
+        writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            pdb_path = os.path.join(PDBS_DIR, row["design_name"] + ".pdb")
+            if not os.path.exists(pdb_path):
+                print(f"PDB file not found, skipping: {pdb_path}")
+                missing += 1
+                continue
+            row["sequence"] = pdb_utils.extract_sequence_from_pdb(pdb_path, chain="A")
+            writer.writerow(row)
+            written += 1
 
-                # Avoid adding duplicate residues
-                if residue_number != previous_residue_number:
-                    sequence += amino_acid_codes.get(residue_name, 'X')
-                    previous_residue_number = residue_number
+    print(f"Wrote {written} minibinder sequences to {OUTPUT_CSV}.")
+    if missing:
+        print(f"{missing} design(s) had no PDB file and were skipped.")
 
-    return sequence
-
-
-
-
-def read_csv_file(csv_file, output_file):
-    infile = open(csv_file, "r")
-    for line in infile:
-        if "pae_interaction" in line:
-            output_file.write(line[:-1]+",sequence\n")
-        else:
-            splitted = line.strip().split(",")
-            print(splitted)
-            pdb_file_path = 'minibinders_to_validate/pdbs/' + splitted[2] + ".pdb"
-
-            # Check if the PDB file exists
-            if os.path.exists(pdb_file_path):
-                # If it exists, extract the sequence
-                sequence = extract_sequence_from_pdb(pdb_file_path)
-                # Write the result to the output file
-                output_file.write(line[:-1] + "," + sequence + "\n")
-            else:
-                # Optionally, handle the case where the file does not exist
-                print(f"PDB file not found: {pdb_file_path}")
-
-parser = argparse.ArgumentParser(description='Process protein designs and output top designs and minibinders.')
-parser.add_argument('-rn', type=int, help='The round number for this execution')
-parser.add_argument('-r', type=int, help='The round number for this execution', default=5)
-parser.add_argument("-m", type=int, help="Number of minibinders required.", default=10)
-parser.add_argument("-d", type=int, help="Number of desings going to the next partial diffusion round.", default=10)
-parser.add_argument("-ipae", type=float, help="ipAE threshold.", default=10)
-parser.add_argument("-plddt", type=float, help="pLDDT threshold.", default=90)
-parser.add_argument("-hs", type=str, help="Hotspots. e.g., A23, A45", default= False)
-parser.add_argument("-sc", type=int, help="Number of scaffolds produced by RFDiffusion.", default=175)
-parser.add_argument("-seq", type=int, help="Number of sequences per scaffold produced by ProteinMPNN", default= 5)
-parser.add_argument("-psc", type=int, help="Number of scaffolds produced by RFDiffusion.", default=5)
-parser.add_argument("-pseq", type=int, help="Number of sequences per scaffold produced by ProteinMPNN", default= 10)
-
-args = parser.parse_args()
+    # The table without sequences is superseded by the one we just wrote.
+    os.remove(INPUT_CSV)
 
 
-output_file = open("minibinders_to_validate/minibinders_to_validate_seqs.csv", "w")
-
-infile = "minibinders_to_validate/minibinders_to_validate.csv"
-
-
-read_csv_file(infile, output_file)
-
-os.remove(infile)
+if __name__ == "__main__":
+    main(cli_args.parse("Add binder sequences to the minibinder table."))
